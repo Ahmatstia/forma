@@ -17,8 +17,10 @@ import {
   P00QuestionDef,
   defaultTemplateRegistry,
   checkTemplatePrerequisites,
+  getStagesForProject,
 } from "@/modules/templates";
 import { compilePrompt, CompileResult } from "@/modules/prompt-compiler";
+import { generatePromptPack } from "@/modules/exports";
 import {
   PromptGenerationRun,
   ValidationMessage,
@@ -95,10 +97,34 @@ export default function PromptStudioPage({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [isExportingPack, setIsExportingPack] = useState(false);
+  const [exportNotice, setExportNotice] = useState<{
+    type: "success" | "error" | "warning";
+    message: string;
+  } | null>(null);
+
+  // Relevant stages for current project platform(s)
+  const relevantStages: ChainStageInfo[] = useMemo(() => {
+    if (!project) return CHAIN_STAGES;
+    return getStagesForProject(project.platforms || []);
+  }, [project]);
+
+  const effectiveStageId = useMemo(() => {
+    if (relevantStages.some((s) => s.id === activeStageId)) {
+      return activeStageId;
+    }
+    return relevantStages[0]?.id || "P-00-IDEA";
+  }, [relevantStages, activeStageId]);
+
   // Active stage configuration
   const currentStage: ChainStageInfo = useMemo(() => {
-    return CHAIN_STAGES.find((s) => s.id === activeStageId) || CHAIN_STAGES[0];
-  }, [activeStageId]);
+    return (
+      relevantStages.find((s) => s.id === effectiveStageId) ||
+      CHAIN_STAGES.find((s) => s.id === effectiveStageId) ||
+      relevantStages[0] ||
+      CHAIN_STAGES[0]
+    );
+  }, [effectiveStageId, relevantStages]);
 
   // Load project, answers, artifacts, and runs
   useEffect(() => {
@@ -177,13 +203,13 @@ export default function PromptStudioPage({
 
   // Prerequisite check for current stage
   const prereqCheck = useMemo(() => {
-    return checkTemplatePrerequisites(activeStageId, approvedStages, defaultTemplateRegistry);
-  }, [activeStageId, approvedStages]);
+    return checkTemplatePrerequisites(effectiveStageId, approvedStages, defaultTemplateRegistry);
+  }, [effectiveStageId, approvedStages]);
 
   // Current stage's artifact
   const currentStageArtifact = useMemo(() => {
-    return artifacts.find((a) => a.stage === activeStageId) || null;
-  }, [artifacts, activeStageId]);
+    return artifacts.find((a) => a.stage === effectiveStageId) || null;
+  }, [artifacts, effectiveStageId]);
 
   // Convert answers state to ProjectAnswer[] for compiler
   const projectAnswersList: ProjectAnswer[] = useMemo(() => {
@@ -226,7 +252,7 @@ export default function PromptStudioPage({
     if (!project) return null;
     try {
       return compilePrompt(project, projectAnswersList, {
-        templateId: activeStageId,
+        templateId: effectiveStageId,
         userOverrides: userOverrides.trim() ? userOverrides : undefined,
         artifacts,
       });
@@ -234,12 +260,12 @@ export default function PromptStudioPage({
       console.error("Compile error:", err);
       return null;
     }
-  }, [project, projectAnswersList, activeStageId, userOverrides, artifacts]);
+  }, [project, projectAnswersList, effectiveStageId, userOverrides, artifacts]);
 
   // Staleness detection for the latest saved run of this stage
   const latestRunForStage = useMemo(() => {
-    return runs.find((r) => r.templateId === activeStageId) || null;
-  }, [runs, activeStageId]);
+    return runs.find((r) => r.templateId === effectiveStageId) || null;
+  }, [runs, effectiveStageId]);
 
   const runStaleness = useMemo(() => {
     if (!latestRunForStage || !compileResult) return null;
@@ -327,9 +353,9 @@ export default function PromptStudioPage({
       const repo = getProjectRepository();
       const now = new Date().toISOString();
       const artifact: AgentArtifact = {
-        id: currentStageArtifact?.id || `art_${projectId}_${activeStageId}_${Date.now()}`,
+        id: currentStageArtifact?.id || `art_${projectId}_${effectiveStageId}_${Date.now()}`,
         projectId,
-        stage: activeStageId,
+        stage: effectiveStageId,
         content: artifactDraftContent.trim(),
         status: newStatus,
         reviewedAt: now,
@@ -347,7 +373,7 @@ export default function PromptStudioPage({
         type: "success",
         message:
           newStatus === "approved"
-            ? `Hasil tahap ${activeStageId} berhasil DISETUJUI (Approved). Konteks ini kini aktif untuk tahap selanjutnya!`
+            ? `Hasil tahap ${effectiveStageId} berhasil DISETUJUI (Approved). Konteks ini kini aktif untuk tahap selanjutnya!`
             : `Status hasil diperbarui menjadi '${newStatus}'.`,
       });
     } catch (err) {
@@ -409,7 +435,7 @@ export default function PromptStudioPage({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${project.name.toLowerCase().replace(/\s+/g, "-")}-${activeStageId}.md`;
+    link.download = `${project.name.toLowerCase().replace(/\s+/g, "-")}-${effectiveStageId}.md`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -423,7 +449,7 @@ export default function PromptStudioPage({
       const run: PromptGenerationRun = {
         id: `run_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         projectId,
-        templateId: activeStageId,
+        templateId: effectiveStageId,
         templateVersion: compileResult.run.templateVersion,
         contextSnapshotId: compileResult.snapshot.id,
         compiledPrompt: compileResult.compiledPrompt,
@@ -436,9 +462,57 @@ export default function PromptStudioPage({
       await repo.saveRun(run);
       const updatedRuns = await repo.getRuns(projectId);
       setRuns(updatedRuns);
-      alert(`Snapshot run untuk tahap ${activeStageId} berhasil disimpan!`);
+      alert(`Snapshot run untuk tahap ${effectiveStageId} berhasil disimpan!`);
     } catch (err) {
       alert("Gagal menyimpan run: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleDownloadPromptPack = async () => {
+    if (!project) return;
+    setIsExportingPack(true);
+    setExportNotice(null);
+    try {
+      const pack = generatePromptPack(project, projectAnswersList, artifacts);
+
+      if (pack.containsSecrets) {
+        setExportNotice({
+          type: "error",
+          message: `Ekspor Prompt Pack diblokir: Terdeteksi kredensial/kunci rahasia pada berkas (${(pack.secretFindings || []).join(
+            ", "
+          )}). Hapus kunci rahasia sebelum mengekspor.`,
+        });
+        return;
+      }
+
+      const blob = new Blob([pack.zipData as unknown as BlobPart], {
+        type: "application/zip",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = pack.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      const approvedCount = pack.manifest.stages.filter(
+        (s) => s.status === "approved"
+      ).length;
+      setExportNotice({
+        type: "success",
+        message: `Prompt Pack '${pack.filename}' berhasil diunduh (${pack.manifest.stages.length} tahap, ${approvedCount} artefak approved).`,
+      });
+    } catch (err) {
+      setExportNotice({
+        type: "error",
+        message:
+          "Gagal membuat Prompt Pack: " +
+          (err instanceof Error ? err.message : String(err)),
+      });
+    } finally {
+      setIsExportingPack(false);
     }
   };
 
@@ -497,11 +571,11 @@ export default function PromptStudioPage({
               {project.name}
             </h1>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 font-medium">
-              Chain Flow P-00 → P-02
+              Chain Flow P-00 → {relevantStages[relevantStages.length - 1]?.stageNumber || "P-04"}
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             <span
               className={`text-xs flex items-center gap-1.5 ${
                 saveIndicator === "saved"
@@ -516,7 +590,7 @@ export default function PromptStudioPage({
               />
               {saveIndicator === "saved"
                 ? "Tersimpan di Browser"
-                : "Ada Perubahan Belum Disimpan"}
+                : "Ada Perubahan"}
             </span>
 
             <button
@@ -527,16 +601,25 @@ export default function PromptStudioPage({
             >
               {isSaving ? "Menyimpan..." : "💾 Simpan Jawaban"}
             </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadPromptPack}
+              disabled={isExportingPack}
+              className="rounded-md border border-indigo-600 bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 text-xs font-semibold shadow-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {isExportingPack ? "Membuat ZIP..." : "📦 Ekspor Prompt Pack (.zip)"}
+            </button>
           </div>
         </div>
       </div>
 
-      {/* R3 Prompt Chain Stage Stepper */}
+      {/* R3/R4 Prompt Chain Stage Stepper */}
       <div className="bg-zinc-100/80 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 sm:px-6">
         <div className="mx-auto max-w-7xl">
           <div className="flex items-center gap-2 overflow-x-auto py-1">
-            {CHAIN_STAGES.map((stage, idx) => {
-              const isSelected = stage.id === activeStageId;
+            {relevantStages.map((stage, idx) => {
+              const isSelected = stage.id === effectiveStageId;
               const isApproved = approvedStages.includes(stage.id);
               const stageArtifact = artifacts.find((a) => a.stage === stage.id);
               const isRejected = stageArtifact?.status === "rejected";
@@ -631,6 +714,37 @@ export default function PromptStudioPage({
 
       {/* Main Studio Work Area */}
       <main className="flex-1 mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* Export Notice Banner */}
+        {exportNotice && (
+          <div
+            className={`rounded-xl border p-3.5 text-xs flex items-center justify-between ${
+              exportNotice.type === "success"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300"
+                : exportNotice.type === "error"
+                ? "bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300"
+                : "bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <span>
+                {exportNotice.type === "success"
+                  ? "✅"
+                  : exportNotice.type === "error"
+                  ? "⛔"
+                  : "⚠️"}
+              </span>
+              <span>{exportNotice.message}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExportNotice(null)}
+              className="text-xs font-bold underline ml-4 cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
         {/* Prerequisite Missing Warning Banner */}
         {!prereqCheck.satisfied && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50/90 dark:border-amber-900/60 dark:bg-amber-950/30 p-4 sm:p-5 text-amber-900 dark:text-amber-200 space-y-2">

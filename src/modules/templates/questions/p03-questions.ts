@@ -1,0 +1,43 @@
+import { P00QuestionDef } from "./p00-questions";
+
+export const P03_QUESTIONS: P00QuestionDef[] = [
+  {
+    key: "architecture.preferredStack",
+    label: "Preferensi Utama Tech Stack",
+    group: "constraints_context",
+    groupTitle: "Pilihan Teknologi",
+    description: "Bahasa, framework, atau runtime yang paling Anda kuasai untuk proyek ini.",
+    placeholder: "Contoh: TypeScript, Next.js, SQLite/PostgreSQL, Tailwind CSS",
+    example: "React + Vite, Node.js Express, atau Flutter",
+    required: false,
+    valueType: "string",
+    defaultCertainty: "preference",
+    helpText: "AI akan memprioritaskan rekomendasi pada keahlian yang sudah Anda miliki.",
+  },
+  {
+    key: "architecture.dataScale",
+    label: "Ekspektasi Skala Data & Konkurensi",
+    group: "constraints_context",
+    groupTitle: "Karakteristik Beban",
+    description: "Perkiraan volume data lokal/server atau jumlah pengguna simultan awal.",
+    placeholder: "Contoh: < 10.000 record per user, single-user offline, atau ratusan transaksi harian",
+    example: "Data tersimpan di perangkat pengguna, sinkronisasi backup opsional",
+    required: false,
+    valueType: "string",
+    defaultCertainty: "assumption",
+    helpText: "Membantu AI memilih strategi penyimpanan data yang tidak over-engineered.",
+  },
+  {
+    key: "architecture.hostingTarget",
+    label: "Target Hosting / Infrastruktur",
+    group: "constraints_context",
+    groupTitle: "Infrastruktur",
+    description: "Lingkungan deployment tempat aplikasi akan dijalankan.",
+    placeholder: "Contoh: Vercel, Cloud Run, Supabase, VPS Linux, atau Pure Client App",
+    example: "Serverless di Vercel dengan database serverless",
+    required: false,
+    valueType: "string",
+    defaultCertainty: "preference",
+    helpText: "Menentukan rekomendasi deployment pipeline dan konfigurasi environment.",
+  },
+];

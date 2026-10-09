@@ -15,7 +15,7 @@ flowchart LR
   R0["R0 Fondasi repo (Done)"] --> R1["R1 Compiler murni (Done)"]
   R1 --> R2["R2 Vertical slice MVP-Core (Done)"]
   R2 --> R3["R3 Prompt Chain Foundation (Done)"]
-  R3 --> R4["R4 Export pack .zip & template lanjutan"]
+  R3 --> R4["R4 Export pack .zip & P-03/P-04 (Done)"]
   R4 --> R5["R5 Server persistence & multi-device auth"]
   R5 --> R6["R6 Artefak & traceability"]
   R6 --> R7["R7 AI assistance (opsional)"]
@@ -27,8 +27,8 @@ flowchart LR
 | R0 | Fondasi repo | Selesai (Verified) | Tidak (infrastruktur) | #19 (sebagian) |
 | R1 | Compiler murni + fixture | Selesai (Verified) | Tidak langsung (diuji lewat test) | #7 (inti), #10 (sebagian), #16 (sebagian) |
 | R2 | Vertical slice MVP-Core | Selesai (Verified) | Ya | #1, #2, #7, #8, #17, #18 |
-| **R3** | **Prompt Chain Foundation (P-00 → P-01 → P-02)** | **Selesai (Verified)** | **Ya** | #8, #9, #10, #11, #13, #15, #16 |
-| R4 | Export pack `.zip` + template P-03…P-12 | Rencana | Ya | #12 |
+| R3 | Prompt Chain Foundation (P-00 → P-01 → P-02) | Selesai (Verified) | Ya | #8, #9, #10, #11, #13, #15, #16 |
+| **R4** | **Prompt Pack Export `.zip` & Technical Planning (P-03, P-04W, P-04M)** | **Selesai (Verified)** | **Ya** | #12, #13, #15 |
 | R5 | Server persistence & multi-device auth | Rencana | Ya | #20 |
 | R6 | Artefak, requirement, asumsi/open question | Ditunda | Sedang | #4, #5, #6, #14 |
 | R7 | AI assistance | Opsional | Sedang | — |

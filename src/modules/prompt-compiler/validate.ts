@@ -2,7 +2,7 @@ import { ProjectAnswer } from "@/modules/projects";
 import { ValidationMessage, ValidationStatus } from "@/modules/runs";
 import { PromptTemplateVersion } from "@/modules/templates";
 
-const SECRET_PATTERNS = [
+export const SECRET_PATTERNS = [
   /(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/,
   /-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----/,
   /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
@@ -10,6 +10,13 @@ const SECRET_PATTERNS = [
   /sk-[A-Za-z0-9_-]{20,}/,
   /(?:api[_-]?key|secret|password|passwd|auth[_-]?token)\s*[:=]\s*['"][A-Za-z0-9!@#$%^&*-_]{8,}['"]/i,
 ];
+
+export function detectSecret(text: string): boolean {
+  for (const pattern of SECRET_PATTERNS) {
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
 
 export interface ValidationResult {
   status: ValidationStatus;
