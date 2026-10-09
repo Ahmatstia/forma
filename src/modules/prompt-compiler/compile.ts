@@ -1,4 +1,4 @@
-import { Project, ProjectAnswer } from "@/modules/projects";
+import { Project, ProjectAnswer, AgentArtifact } from "@/modules/projects";
 import {
   hashContextSnapshot,
   ProjectContextSnapshot,
@@ -6,7 +6,7 @@ import {
   ValidationMessage,
   ValidationStatus,
 } from "@/modules/runs";
-import { defaultTemplateRegistry } from "@/modules/templates";
+import { defaultTemplateRegistry, checkTemplatePrerequisites } from "@/modules/templates";
 import { SafeTemplateRenderer } from "./engine/safe-renderer";
 import { TemplateRenderer } from "./engine/renderer";
 import { GLOBAL_AGENT_CONTRACT } from "./layers/global-contract";
@@ -20,6 +20,7 @@ export interface CompilePromptOptions {
   templateVersion?: number;
   userOverrides?: string;
   renderer?: TemplateRenderer;
+  artifacts?: AgentArtifact[];
 }
 
 export interface CompilePromptResult {
@@ -52,16 +53,31 @@ export function compilePrompt(
   }
 
   // 1. Resolve context into namespaces answers and derived
-  const resolved = resolveProjectContext(project, answers);
+  const resolved = resolveProjectContext(project, answers, options?.artifacts);
 
-  // 2. Validate input variables
+  // 2. Validate prerequisites for prompt chain
+  const prereqCheck = checkTemplatePrerequisites(
+    template.id,
+    resolved.approvedStages,
+    defaultTemplateRegistry
+  );
+  const prereqMessages: ValidationMessage[] = prereqCheck.missingPrerequisites.map(
+    (p) => ({
+      level: "error",
+      code: "PREREQUISITE_NOT_MET",
+      field: p.templateId,
+      message: p.reason,
+    })
+  );
+
+  // 3. Validate input variables
   const inputValidation = validateCompilerInputs(
     version,
     answers,
     resolved.answers
   );
 
-  // 3. Render context envelope
+  // 4. Render context envelope
   const renderer = options?.renderer || new SafeTemplateRenderer();
   const renderContext: Record<string, unknown> = {
     template: {
@@ -71,14 +87,17 @@ export function compilePrompt(
     },
     answers: resolved.answers,
     derived: resolved.derived,
+    context: {
+      artifact: resolved.artifactsMap,
+    },
   };
 
   const renderedEnvelope = renderer.render(CONTEXT_ENVELOPE_TEMPLATE, renderContext);
 
-  // 4. Render main stage template body
+  // 5. Render main stage template body
   const renderedBody = renderer.render(version.templateBody, renderContext);
 
-  // 5. Render platform adapter
+  // 6. Render platform adapter
   const platformFlags = resolved.derived.platform as {
     web: boolean;
     mobile: boolean;
@@ -86,7 +105,7 @@ export function compilePrompt(
   };
   const renderedPlatformAdapter = renderPlatformAdapter(platformFlags);
 
-  // 6. Assemble layers
+  // 7. Assemble layers
   const layers: string[] = [
     GLOBAL_AGENT_CONTRACT,
     renderedEnvelope,
@@ -113,10 +132,14 @@ export function compilePrompt(
 
   const finalPrompt = layers.join("\n\n");
 
-  // 7. Validate rendered output (tokens, secret leaks)
+  // 8. Validate rendered output (tokens, secret leaks)
   const outputMessages = validateRenderedOutput(finalPrompt);
 
-  const allMessages = [...inputValidation.messages, ...outputMessages];
+  const allMessages = [
+    ...prereqMessages,
+    ...inputValidation.messages,
+    ...outputMessages,
+  ];
   const hasError = allMessages.some((m) => m.level === "error");
   const hasWarning = allMessages.some((m) => m.level === "warning");
   const validationStatus: ValidationStatus = hasError
@@ -125,10 +148,14 @@ export function compilePrompt(
     ? "warning"
     : "ready";
 
-  // 8. Produce snapshot and run records
+  // 9. Produce snapshot and run records
   const contextHash = hashContextSnapshot({
     answers: resolved.answers,
-    derived: resolved.derived,
+    derived: {
+      ...resolved.derived,
+      approvedStages: resolved.approvedStages,
+      artifacts: resolved.artifactsMap,
+    },
   });
 
   const timestamp = new Date().toISOString();

@@ -3,19 +3,20 @@ import {
   ProjectAnswer,
   ProjectSchema,
   ProjectAnswerSchema,
-} from "./types";
-import { PromptGenerationRun, PromptGenerationRunSchema } from "@/modules/runs";
-import {
+  AgentArtifact,
+  AgentArtifactSchema,
   ExportPayload,
   ExportPayloadSchema,
   ImportResult,
   ProjectRepository,
-} from "./repository";
+} from "@/modules/projects";
+import { PromptGenerationRun, PromptGenerationRunSchema } from "@/modules/runs";
 
 const STORAGE_KEYS = {
   PROJECTS: "forma:projects:v1",
   ANSWERS: "forma:answers:v1",
   RUNS: "forma:runs:v1",
+  ARTIFACTS: "forma:artifacts:v1",
 };
 
 export class LocalStorageProjectRepository implements ProjectRepository {
@@ -23,6 +24,7 @@ export class LocalStorageProjectRepository implements ProjectRepository {
   private memoryProjects: Map<string, Project> = new Map();
   private memoryAnswers: Map<string, ProjectAnswer[]> = new Map();
   private memoryRuns: Map<string, PromptGenerationRun[]> = new Map();
+  private memoryArtifacts: Map<string, AgentArtifact[]> = new Map();
 
   private isStorageAvailable(): boolean {
     if (typeof window === "undefined" || !window.localStorage) {
@@ -53,6 +55,13 @@ export class LocalStorageProjectRepository implements ProjectRepository {
       if (key === STORAGE_KEYS.RUNS) {
         const all: PromptGenerationRun[] = [];
         for (const list of this.memoryRuns.values()) {
+          all.push(...list);
+        }
+        return all as unknown as T[];
+      }
+      if (key === STORAGE_KEYS.ARTIFACTS) {
+        const all: AgentArtifact[] = [];
+        for (const list of this.memoryArtifacts.values()) {
           all.push(...list);
         }
         return all as unknown as T[];
@@ -95,6 +104,14 @@ export class LocalStorageProjectRepository implements ProjectRepository {
           this.memoryRuns.set(r.projectId, existing);
         }
       }
+      if (key === STORAGE_KEYS.ARTIFACTS) {
+        this.memoryArtifacts.clear();
+        for (const art of items as unknown as AgentArtifact[]) {
+          const existing = this.memoryArtifacts.get(art.projectId) || [];
+          existing.push(art);
+          this.memoryArtifacts.set(art.projectId, existing);
+        }
+      }
       return;
     }
 
@@ -123,7 +140,6 @@ export class LocalStorageProjectRepository implements ProjectRepository {
         valid.push(parsed.data);
       }
     }
-    // Sort newest first
     return valid.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
@@ -164,6 +180,14 @@ export class LocalStorageProjectRepository implements ProjectRepository {
       return parsed.success && parsed.data.projectId !== id;
     });
     this.writeStorage(STORAGE_KEYS.RUNS, filteredRuns);
+
+    // Clean up artifacts for this project
+    const allArtifacts = this.readStorage<unknown>(STORAGE_KEYS.ARTIFACTS);
+    const filteredArtifacts = allArtifacts.filter((art) => {
+      const parsed = AgentArtifactSchema.safeParse(art);
+      return parsed.success && parsed.data.projectId !== id;
+    });
+    this.writeStorage(STORAGE_KEYS.ARTIFACTS, filteredArtifacts);
   }
 
   async getAnswers(projectId: string): Promise<ProjectAnswer[]> {
@@ -212,6 +236,33 @@ export class LocalStorageProjectRepository implements ProjectRepository {
     this.writeStorage(STORAGE_KEYS.RUNS, [validated, ...existing]);
   }
 
+  async getArtifacts(projectId: string): Promise<AgentArtifact[]> {
+    const rawList = this.readStorage<unknown>(STORAGE_KEYS.ARTIFACTS);
+    const artifacts: AgentArtifact[] = [];
+    for (const item of rawList) {
+      const parsed = AgentArtifactSchema.safeParse(item);
+      if (parsed.success && parsed.data.projectId === projectId) {
+        artifacts.push(parsed.data);
+      }
+    }
+    return artifacts.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async getArtifact(projectId: string, stage: string): Promise<AgentArtifact | null> {
+    const list = await this.getArtifacts(projectId);
+    return list.find((a) => a.stage === stage) || null;
+  }
+
+  async saveArtifact(artifact: AgentArtifact): Promise<void> {
+    const validated = AgentArtifactSchema.parse(artifact);
+    const rawList = this.readStorage<unknown>(STORAGE_KEYS.ARTIFACTS);
+    const existing = rawList.filter((item) => {
+      const parsed = AgentArtifactSchema.safeParse(item);
+      return parsed.success && !(parsed.data.projectId === validated.projectId && parsed.data.stage === validated.stage);
+    });
+    this.writeStorage(STORAGE_KEYS.ARTIFACTS, [validated, ...existing]);
+  }
+
   async exportAll(): Promise<ExportPayload> {
     const projects = await this.getProjects();
     const rawAnswers = this.readStorage<unknown>(STORAGE_KEYS.ANSWERS);
@@ -228,13 +279,21 @@ export class LocalStorageProjectRepository implements ProjectRepository {
       if (parsed.success) runs.push(parsed.data);
     }
 
+    const rawArtifacts = this.readStorage<unknown>(STORAGE_KEYS.ARTIFACTS);
+    const artifacts: AgentArtifact[] = [];
+    for (const art of rawArtifacts) {
+      const parsed = AgentArtifactSchema.safeParse(art);
+      if (parsed.success) artifacts.push(parsed.data);
+    }
+
     return {
-      version: "1.0",
+      version: "2.0",
       exportedAt: new Date().toISOString(),
       source: "forma-browser-storage",
       projects,
       answers,
       runs,
+      artifacts,
     };
   }
 
@@ -300,6 +359,21 @@ export class LocalStorageProjectRepository implements ProjectRepository {
     this.writeStorage(
       STORAGE_KEYS.RUNS,
       Array.from(runMap.values())
+    );
+
+    // Merge artifacts if present (v1.0 may have empty/default)
+    const existingArtifacts = this.readStorage<unknown>(STORAGE_KEYS.ARTIFACTS);
+    const artifactMap = new Map<string, AgentArtifact>();
+    for (const art of existingArtifacts) {
+      const parsed = AgentArtifactSchema.safeParse(art);
+      if (parsed.success) artifactMap.set(`${parsed.data.projectId}#${parsed.data.stage}`, parsed.data);
+    }
+    for (const art of data.artifacts || []) {
+      artifactMap.set(`${art.projectId}#${art.stage}`, art);
+    }
+    this.writeStorage(
+      STORAGE_KEYS.ARTIFACTS,
+      Array.from(artifactMap.values())
     );
 
     return {

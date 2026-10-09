@@ -71,3 +71,25 @@ export const ProjectSchema = z.object({
   updatedAt: z.string(),
 });
 export type Project = z.infer<typeof ProjectSchema>;
+
+export const ArtifactStatusSchema = z.enum([
+  "captured",
+  "in_review",
+  "approved",
+  "rejected",
+]);
+export type ArtifactStatus = z.infer<typeof ArtifactStatusSchema>;
+
+export const AgentArtifactSchema = z.object({
+  id: z.string().min(1),
+  projectId: z.string().min(1),
+  stage: z.string().min(1),
+  content: z.string(),
+  status: ArtifactStatusSchema,
+  reviewedAt: z.string().optional(),
+  approvedAt: z.string().optional(),
+  source: z.enum(["user_paste", "file_upload", "direct_input"]).default("user_paste"),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AgentArtifact = z.infer<typeof AgentArtifactSchema>;

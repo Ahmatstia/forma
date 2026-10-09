@@ -31,6 +31,7 @@ Label resmi:
 | **A-11** | **Evaluasi Template Engine (LiquidJS vs Minimal Renderer):** LiquidJS hanya boleh dipilih jika spike teknis membuktikan kontrol operasi allowlist dan keamanan sesuai kontrak compiler. Jika gagal, gunakan renderer minimal yang terbatas dan teruji. | **APPROVED** | [ADR-0009](../decisions/ADR-0009-template-engine-evaluation-liquidjs.md) |
 | **A-12** | **AI Assistance Bersifat Opsional:** Fitur integrasi AI (interviewer adaptif, ekstraksi) bersifat opsional dan compiler tidak boleh memiliki ketergantungan pada API key atau provider AI eksternal. | **APPROVED** | [ADR-0010](../decisions/ADR-0010-ai-assistance-optional.md) |
 | **A-13** | **Persistensi Browser & Pengamanan Pagar Data (R2):** Gunakan localStorage di balik interface ProjectRepository dengan Zod schema validation dan format cadangan ekspor/impor JSON v1.0. Terapkan pagar dinamis berpagar panjang ganda (dynamic code fence) untuk mencegah injeksi triple backticks. | **APPROVED** | [ADR-0011](../decisions/ADR-0011-browser-storage-and-r2-persistence.md) |
+| **A-14** | **Prompt Chain Foundation & Offline-First Artifact Lifecycle (R3):** Rantai prompt P-00 → P-01 → P-02 terhubung deterministik di penyimpanan browser tanpa server DB/AI API. Hanya artefak berstatus `approved` yang masuk konteks downstream. Deteksi staleness dihitung on-the-fly tanpa memutasi snapshot historis. Siklus dependency ditolak. Ekspor/impor mendukung v1.0 dan v2.0. | **APPROVED** | ADR-0012-prompt-chain-foundation |
 
 ---
 

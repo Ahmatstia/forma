@@ -1,4 +1,4 @@
-import { Project, ProjectAnswer } from "@/modules/projects";
+import { Project, ProjectAnswer, AgentArtifact } from "@/modules/projects";
 
 const NONE_RECORDED = "Tidak ada item tercatat.";
 
@@ -36,13 +36,16 @@ const FIELD_HUMAN_LABELS: Record<string, string> = {
 export interface ResolvedContext {
   answers: Record<string, unknown>;
   derived: Record<string, unknown>;
+  artifactsMap: Record<string, { approvedContent: string; status: string; id?: string }>;
+  approvedStages: string[];
   openQuestions: string[];
   warnings: string[];
 }
 
 export function resolveProjectContext(
   project: Project,
-  answers: ProjectAnswer[]
+  answers: ProjectAnswer[],
+  artifacts?: AgentArtifact[]
 ): ResolvedContext {
   const answersDict: Record<string, unknown> = {};
 
@@ -161,9 +164,56 @@ export function resolveProjectContext(
     conflictsAndWarningsText: NONE_RECORDED,
   };
 
+  const artifactsMap: Record<
+    string,
+    { approvedContent: string; status: string; id?: string }
+  > = {};
+  const approvedStages: string[] = [];
+
+  const stageKeys = [
+    { canonical: "P-00-IDEA", aliases: ["P00", "P00_IDEA"] },
+    { canonical: "P-01-PRODUCT-BRIEF", aliases: ["P01", "P01_PRODUCT_BRIEF"] },
+    { canonical: "P-02-PRD", aliases: ["P02", "P02_PRD"] },
+  ];
+
+  for (const s of stageKeys) {
+    const art = (artifacts || []).find((a) => a.stage === s.canonical);
+    if (art && art.status === "approved") {
+      approvedStages.push(s.canonical);
+      const content = art.content.trim();
+      const entry = { approvedContent: content, status: "approved", id: art.id };
+      artifactsMap[s.canonical] = entry;
+      for (const alias of s.aliases) {
+        artifactsMap[alias] = entry;
+      }
+    } else {
+      const entry = {
+        approvedContent: "Belum ada hasil yang disetujui untuk tahap ini.",
+        status: art?.status || "missing",
+        id: art?.id,
+      };
+      artifactsMap[s.canonical] = entry;
+      for (const alias of s.aliases) {
+        artifactsMap[alias] = entry;
+      }
+    }
+  }
+
+  const approvedArtifacts = (artifacts || []).filter((a) => a.status === "approved");
+  const approvedArtifactsText =
+    approvedArtifacts.length > 0
+      ? approvedArtifacts
+          .map((a) => `- ${a.stage}: Disetujui (${a.content.length} karakter)`)
+          .join("\n")
+      : NONE_RECORDED;
+
+  derived.approvedArtifactsText = approvedArtifactsText;
+
   return {
     answers: nestedAnswers,
     derived,
+    artifactsMap,
+    approvedStages,
     openQuestions,
     warnings,
   };

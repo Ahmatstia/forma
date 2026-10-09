@@ -1,4 +1,6 @@
 import { P00_IDEA_V1 } from "./seeds/p00-idea";
+import { P01_PRODUCT_BRIEF_V1 } from "./seeds/p01-product-brief";
+import { P02_PRD_V1 } from "./seeds/p02-prd";
 import {
   PromptTemplate,
   PromptTemplateSchema,
@@ -8,11 +10,19 @@ import {
 export class TemplateRegistry {
   private templates: Map<string, PromptTemplate> = new Map();
 
-  constructor() {
-    this.registerSeed(P00_IDEA_V1);
+  constructor(initialTemplates?: PromptTemplate[]) {
+    if (initialTemplates) {
+      for (const t of initialTemplates) {
+        this.register(t);
+      }
+    } else {
+      this.register(P00_IDEA_V1);
+      this.register(P01_PRODUCT_BRIEF_V1);
+      this.register(P02_PRD_V1);
+    }
   }
 
-  private registerSeed(template: PromptTemplate): void {
+  public register(template: PromptTemplate): void {
     const validated = PromptTemplateSchema.parse(template);
     this.templates.set(validated.id, validated);
   }

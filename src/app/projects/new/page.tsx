@@ -8,8 +8,8 @@ import {
   ComplexityTrack,
   Platform,
   Project,
-  getProjectRepository,
 } from "@/modules/projects";
+import { getProjectRepository } from "@/infrastructure/storage-browser";
 
 const AVAILABLE_PLATFORMS: { id: Platform; label: string; desc: string }[] = [
   { id: "web", label: "Web", desc: "Aplikasi browser desktop & responsif" },

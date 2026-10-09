@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { LocalStorageProjectRepository } from "@/modules/projects/local-storage-repository";
-import { Project, ProjectAnswer } from "@/modules/projects/types";
+import { LocalStorageProjectRepository } from "@/infrastructure/storage-browser";
+import { Project, ProjectAnswer } from "@/modules/projects";
 import { compilePrompt } from "@/modules/prompt-compiler";
 import { PromptGenerationRun } from "@/modules/runs";
 
@@ -146,7 +146,7 @@ describe("R2 MVP Vertical Slice — End-to-End Core Workflow", () => {
 
     // 6. Export and Import roundtrip
     const exportData = await repo.exportAll();
-    expect(exportData.version).toBe("1.0");
+    expect(exportData.version).toBe("2.0");
     expect(exportData.projects.length).toBe(1);
     expect(exportData.answers.length).toBe(4);
     expect(exportData.runs.length).toBe(1);

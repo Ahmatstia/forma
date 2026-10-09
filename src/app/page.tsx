@@ -2,7 +2,8 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { Project, getProjectRepository } from "@/modules/projects";
+import { Project } from "@/modules/projects";
+import { getProjectRepository } from "@/infrastructure/storage-browser";
 import { Navbar } from "@/components/navbar";
 import { StorageNotice } from "@/components/storage-notice";
 import { ConfirmModal } from "@/components/confirm-modal";

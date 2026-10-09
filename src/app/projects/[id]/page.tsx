@@ -1,21 +1,29 @@
 "use client";
 
-import React, { useEffect, useState, useMemo, use } from "react";
+import React, { useEffect, useState, useMemo, useRef, use } from "react";
 import Link from "next/link";
 import { Navbar } from "@/components/navbar";
 import {
   Certainty,
   Project,
   ProjectAnswer,
-  getProjectRepository,
+  AgentArtifact,
+  ArtifactStatus,
 } from "@/modules/projects";
+import { getProjectRepository } from "@/infrastructure/storage-browser";
 import {
-  P00_QUESTIONS,
-  P00_QUESTION_GROUPS,
+  CHAIN_STAGES,
+  ChainStageInfo,
   P00QuestionDef,
+  defaultTemplateRegistry,
+  checkTemplatePrerequisites,
 } from "@/modules/templates";
 import { compilePrompt, CompileResult } from "@/modules/prompt-compiler";
-import { PromptGenerationRun, ValidationMessage } from "@/modules/runs";
+import {
+  PromptGenerationRun,
+  ValidationMessage,
+  checkRunStaleness,
+} from "@/modules/runs";
 
 const CERTAINTY_OPTIONS: {
   id: Certainty;
@@ -64,17 +72,35 @@ export default function PromptStudioPage({
   const projectId = resolvedParams.id;
 
   const [project, setProject] = useState<Project | null>(null);
+  const [activeStageId, setActiveStageId] = useState<string>("P-00-IDEA");
   const [answers, setAnswers] = useState<Record<string, { value: string; certainty: Certainty }>>({});
+  const [artifacts, setArtifacts] = useState<AgentArtifact[]>([]);
+  const [runs, setRuns] = useState<PromptGenerationRun[]>([]);
+
+  // Capture artifact editor state for active stage
+  const [artifactDraftContent, setArtifactDraftContent] = useState("");
+  const [artifactFeedback, setArtifactFeedback] = useState<{ type: "success" | "error" | null; message: string }>({
+    type: null,
+    message: "",
+  });
+
   const [userOverrides, setUserOverrides] = useState("");
   const [customPromptText, setCustomPromptText] = useState("");
-  const [activeTab, setActiveTab] = useState<"questions" | "preview">("questions");
+  const [activeTab, setActiveTab] = useState<"questions" | "preview" | "artifact">("questions");
   const [previewMode, setPreviewMode] = useState<"compiled" | "custom" | "overrides">("compiled");
   const [isSaving, setIsSaving] = useState(false);
   const [saveIndicator, setSaveIndicator] = useState<"saved" | "unsaved">("saved");
   const [copyToast, setCopyToast] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Load project & answers
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Active stage configuration
+  const currentStage: ChainStageInfo = useMemo(() => {
+    return CHAIN_STAGES.find((s) => s.id === activeStageId) || CHAIN_STAGES[0];
+  }, [activeStageId]);
+
+  // Load project, answers, artifacts, and runs
   useEffect(() => {
     let ignore = false;
     async function loadData() {
@@ -92,9 +118,11 @@ export default function PromptStudioPage({
         if (ignore) return;
         const ansMap: Record<string, { value: string; certainty: Certainty }> = {};
 
-        // Populate defaults from questions def
-        for (const q of P00_QUESTIONS) {
-          ansMap[q.key] = { value: "", certainty: q.defaultCertainty };
+        // Populate defaults from all chain stages
+        for (const stage of CHAIN_STAGES) {
+          for (const q of stage.questions) {
+            ansMap[q.key] = { value: "", certainty: q.defaultCertainty };
+          }
         }
 
         // Overwrite with stored answers
@@ -110,8 +138,19 @@ export default function PromptStudioPage({
             certainty: a.certainty,
           };
         }
-
         setAnswers(ansMap);
+
+        const existingArtifacts = await repo.getArtifacts(projectId);
+        if (ignore) return;
+        setArtifacts(existingArtifacts);
+        const currentArt = existingArtifacts.find((a) => a.stage === "P-00-IDEA");
+        if (currentArt) {
+          setArtifactDraftContent(currentArt.content);
+        }
+
+        const existingRuns = await repo.getRuns(projectId);
+        if (ignore) return;
+        setRuns(existingRuns);
       } catch (err) {
         console.error("Gagal memuat data:", err);
       } finally {
@@ -124,6 +163,28 @@ export default function PromptStudioPage({
     };
   }, [projectId]);
 
+  const handleSelectStage = (stageId: string) => {
+    setActiveStageId(stageId);
+    const existing = artifacts.find((a) => a.stage === stageId);
+    setArtifactDraftContent(existing ? existing.content : "");
+    setArtifactFeedback({ type: null, message: "" });
+  };
+
+  // Approved stages list for prerequisite validation
+  const approvedStages = useMemo(() => {
+    return artifacts.filter((a) => a.status === "approved").map((a) => a.stage);
+  }, [artifacts]);
+
+  // Prerequisite check for current stage
+  const prereqCheck = useMemo(() => {
+    return checkTemplatePrerequisites(activeStageId, approvedStages, defaultTemplateRegistry);
+  }, [activeStageId, approvedStages]);
+
+  // Current stage's artifact
+  const currentStageArtifact = useMemo(() => {
+    return artifacts.find((a) => a.stage === activeStageId) || null;
+  }, [artifacts, activeStageId]);
+
   // Convert answers state to ProjectAnswer[] for compiler
   const projectAnswersList: ProjectAnswer[] = useMemo(() => {
     return Object.entries(answers).map(([key, item], index) => {
@@ -134,7 +195,9 @@ export default function PromptStudioPage({
         | string[]
         | Record<string, unknown>
         | null = item.value.trim();
-      const qDef = P00_QUESTIONS.find((q) => q.key === key);
+
+      const allQuestions = CHAIN_STAGES.flatMap((s) => s.questions);
+      const qDef = allQuestions.find((q) => q.key === key);
 
       if (item.certainty === "unknown") {
         parsedValue = null;
@@ -158,20 +221,36 @@ export default function PromptStudioPage({
     });
   }, [answers, projectId]);
 
-  // Live compilation via pure R1 compiler
+  // Live compilation via pure compiler with chain artifacts
   const compileResult: CompileResult | null = useMemo(() => {
     if (!project) return null;
     try {
       return compilePrompt(project, projectAnswersList, {
+        templateId: activeStageId,
         userOverrides: userOverrides.trim() ? userOverrides : undefined,
+        artifacts,
       });
     } catch (err) {
       console.error("Compile error:", err);
       return null;
     }
-  }, [project, projectAnswersList, userOverrides]);
+  }, [project, projectAnswersList, activeStageId, userOverrides, artifacts]);
 
-  // Handle answering field
+  // Staleness detection for the latest saved run of this stage
+  const latestRunForStage = useMemo(() => {
+    return runs.find((r) => r.templateId === activeStageId) || null;
+  }, [runs, activeStageId]);
+
+  const runStaleness = useMemo(() => {
+    if (!latestRunForStage || !compileResult) return null;
+    return checkRunStaleness(
+      latestRunForStage,
+      compileResult.snapshot.contextHash,
+      compileResult.run.templateVersion
+    );
+  }, [latestRunForStage, compileResult]);
+
+  // Handle questionnaire changes
   const handleAnswerChange = (key: string, value: string) => {
     setAnswers((prev) => ({
       ...prev,
@@ -194,7 +273,6 @@ export default function PromptStudioPage({
     setSaveIndicator("unsaved");
   };
 
-  // Auto-save debounced or on-demand
   const saveAnswersToStorage = async () => {
     if (!project) return;
     setIsSaving(true);
@@ -206,6 +284,102 @@ export default function PromptStudioPage({
       alert("Gagal menyimpan jawaban: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Handle Agent Artifact submission & review
+  const handleSaveArtifact = async (newStatus: ArtifactStatus) => {
+    if (!project) return;
+    if (!artifactDraftContent.trim()) {
+      setArtifactFeedback({
+        type: "error",
+        message: "Konten hasil agent tidak boleh kosong.",
+      });
+      return;
+    }
+
+    // Security check: validate size (max 500KB)
+    if (artifactDraftContent.length > 500 * 1024) {
+      setArtifactFeedback({
+        type: "error",
+        message: "Ukuran berkas melebihi batas maksimal 500 KB.",
+      });
+      return;
+    }
+
+    // Security check: secret scanning
+    const hasSecretPattern =
+      /(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/.test(artifactDraftContent) ||
+      /sk-[A-Za-z0-9_-]{20,}/.test(artifactDraftContent) ||
+      /ghp_[A-Za-z0-9]{36}/.test(artifactDraftContent) ||
+      /-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----/.test(artifactDraftContent);
+
+    if (hasSecretPattern) {
+      setArtifactFeedback({
+        type: "error",
+        message:
+          "Terdeteksi string menyerupai kredensial/API key dalam hasil agent. Hapus kunci rahasia sebelum menyetujui dokumen ini.",
+      });
+      return;
+    }
+
+    try {
+      const repo = getProjectRepository();
+      const now = new Date().toISOString();
+      const artifact: AgentArtifact = {
+        id: currentStageArtifact?.id || `art_${projectId}_${activeStageId}_${Date.now()}`,
+        projectId,
+        stage: activeStageId,
+        content: artifactDraftContent.trim(),
+        status: newStatus,
+        reviewedAt: now,
+        approvedAt: newStatus === "approved" ? now : currentStageArtifact?.approvedAt,
+        source: "user_paste",
+        createdAt: currentStageArtifact?.createdAt || now,
+        updatedAt: now,
+      };
+
+      await repo.saveArtifact(artifact);
+      const updatedList = await repo.getArtifacts(projectId);
+      setArtifacts(updatedList);
+
+      setArtifactFeedback({
+        type: "success",
+        message:
+          newStatus === "approved"
+            ? `Hasil tahap ${activeStageId} berhasil DISETUJUI (Approved). Konteks ini kini aktif untuk tahap selanjutnya!`
+            : `Status hasil diperbarui menjadi '${newStatus}'.`,
+      });
+    } catch (err) {
+      setArtifactFeedback({
+        type: "error",
+        message:
+          "Gagal menyimpan artefak: " +
+          (err instanceof Error ? err.message : String(err)),
+      });
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 500 * 1024) {
+      alert("Ukuran berkas maksimal 500 KB.");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      setArtifactDraftContent(text);
+      setArtifactFeedback({
+        type: "success",
+        message: `Berkas '${file.name}' berhasil dimuat ke editor. Silakan tinjau dan klik 'Setujui Hasil' jika sudah sesuai.`,
+      });
+    } catch (err) {
+      alert("Gagal membaca berkas: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -235,7 +409,7 @@ export default function PromptStudioPage({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${project.name.toLowerCase().replace(/\s+/g, "-")}-P-00.md`;
+    link.download = `${project.name.toLowerCase().replace(/\s+/g, "-")}-${activeStageId}.md`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -249,8 +423,8 @@ export default function PromptStudioPage({
       const run: PromptGenerationRun = {
         id: `run_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         projectId,
-        templateId: "P-00-IDEA",
-        templateVersion: 1,
+        templateId: activeStageId,
+        templateVersion: compileResult.run.templateVersion,
         contextSnapshotId: compileResult.snapshot.id,
         compiledPrompt: compileResult.compiledPrompt,
         userEditedPrompt: customPromptText.trim() ? customPromptText : undefined,
@@ -260,7 +434,9 @@ export default function PromptStudioPage({
         createdAt: new Date().toISOString(),
       };
       await repo.saveRun(run);
-      alert("Snapshot run berhasil disimpan ke riwayat proyek!");
+      const updatedRuns = await repo.getRuns(projectId);
+      setRuns(updatedRuns);
+      alert(`Snapshot run untuk tahap ${activeStageId} berhasil disimpan!`);
     } catch (err) {
       alert("Gagal menyimpan run: " + (err instanceof Error ? err.message : String(err)));
     }
@@ -271,7 +447,7 @@ export default function PromptStudioPage({
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex flex-col font-sans">
         <Navbar />
         <div className="flex-1 flex items-center justify-center text-sm text-zinc-500">
-          Memuat Prompt Studio...
+          Memuat Prompt Studio & Chain Stages...
         </div>
       </div>
     );
@@ -286,7 +462,7 @@ export default function PromptStudioPage({
             Proyek Tidak Ditemukan
           </h2>
           <p className="mt-2 text-sm text-zinc-500">
-            Proyek dengan ID ini tidak ada di penyimpanan browser perangkat Anda.
+            Proyek ini tidak ditemukan di penyimpanan browser perangkat Anda.
           </p>
           <Link
             href="/"
@@ -320,8 +496,8 @@ export default function PromptStudioPage({
             <h1 className="text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-100">
               {project.name}
             </h1>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
-              P-00 Klarifikasi Ide
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 font-medium">
+              Chain Flow P-00 → P-02
             </span>
           </div>
 
@@ -355,6 +531,62 @@ export default function PromptStudioPage({
         </div>
       </div>
 
+      {/* R3 Prompt Chain Stage Stepper */}
+      <div className="bg-zinc-100/80 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 sm:px-6">
+        <div className="mx-auto max-w-7xl">
+          <div className="flex items-center gap-2 overflow-x-auto py-1">
+            {CHAIN_STAGES.map((stage, idx) => {
+              const isSelected = stage.id === activeStageId;
+              const isApproved = approvedStages.includes(stage.id);
+              const stageArtifact = artifacts.find((a) => a.stage === stage.id);
+              const isRejected = stageArtifact?.status === "rejected";
+              const isInReview = stageArtifact?.status === "captured" || stageArtifact?.status === "in_review";
+              const isPrereqMet = !stage.prerequisiteId || approvedStages.includes(stage.prerequisiteId);
+
+              return (
+                <button
+                  key={stage.id}
+                  type="button"
+                  onClick={() => handleSelectStage(stage.id)}
+                  className={`flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition whitespace-nowrap cursor-pointer border ${
+                    isSelected
+                      ? "bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 border-indigo-500/60 shadow-xs ring-1 ring-indigo-500/30"
+                      : "bg-white/50 dark:bg-zinc-900/40 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-800 hover:bg-white dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-zinc-200 dark:bg-zinc-700 text-[10px]">
+                    {idx + 1}
+                  </span>
+                  <span>{stage.title}</span>
+
+                  {/* Status Badge */}
+                  {isApproved && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300">
+                      ✓ Approved
+                    </span>
+                  )}
+                  {isRejected && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300">
+                      ✗ Rejected
+                    </span>
+                  )}
+                  {isInReview && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300">
+                      In Review
+                    </span>
+                  )}
+                  {!stageArtifact && !isPrereqMet && (
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      Locked
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
       {/* Mobile Tab Switcher */}
       <div className="lg:hidden border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 flex">
         <button
@@ -366,7 +598,7 @@ export default function PromptStudioPage({
               : "border-transparent text-zinc-500 hover:text-zinc-800"
           }`}
         >
-          1. Kuesioner P-00
+          1. Kuesioner Tahap Ini
         </button>
         <button
           type="button"
@@ -377,145 +609,183 @@ export default function PromptStudioPage({
               : "border-transparent text-zinc-500 hover:text-zinc-800"
           }`}
         >
-          2. Hasil Prompt & Validasi
+          2. Prompt & Validasi
           {isBlocked && (
-            <span className="ml-1.5 px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[10px]">
+            <span className="ml-1 px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[10px]">
               Blocked
             </span>
           )}
         </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("artifact")}
+          className={`flex-1 py-3 text-xs font-semibold text-center border-b-2 transition ${
+            activeTab === "artifact"
+              ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+              : "border-transparent text-zinc-500 hover:text-zinc-800"
+          }`}
+        >
+          3. Tangkap Hasil Agent
+        </button>
       </div>
 
       {/* Main Studio Work Area */}
-      <main className="flex-1 mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 mx-auto w-full max-w-7xl p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* Prerequisite Missing Warning Banner */}
+        {!prereqCheck.satisfied && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50/90 dark:border-amber-900/60 dark:bg-amber-950/30 p-4 sm:p-5 text-amber-900 dark:text-amber-200 space-y-2">
+            <div className="flex items-center gap-2 font-bold text-sm">
+              <span>⚠️</span>
+              <span>Prasyarat Tahap Ini Belum Terpenuhi</span>
+            </div>
+            <p className="text-xs sm:text-sm text-amber-800 dark:text-amber-300">
+              {currentStage.title} memerlukan hasil yang disetujui dari tahap sebelumnya (
+              <strong>{currentStage.prerequisiteName}</strong>) agar prompt memiliki konteks terhubung dan tidak berhalusinasi.
+            </p>
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (currentStage.prerequisiteId) {
+                    handleSelectStage(currentStage.prerequisiteId);
+                  }
+                }}
+                className="rounded-lg bg-amber-800 text-white px-3 py-1.5 text-xs font-semibold hover:bg-amber-700 transition cursor-pointer"
+              >
+                ← Buka {currentStage.prerequisiteName} untuk Review & Approve
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Staleness Banner if current context differs from saved run */}
+        {runStaleness?.isStale && (
+          <div className="rounded-xl border border-amber-300/80 bg-amber-50/70 p-3.5 dark:border-amber-900/40 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span>🔄</span>
+              <span>
+                <strong>Run Sebelumnya Menjadi Stale:</strong> {runStaleness.reason}
+              </span>
+            </div>
+            <span className="text-[11px] text-amber-700 dark:text-amber-400 italic">
+              Snapshot run lama tetap aman tersimpan.
+            </span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Kolom Kiri: Kuesioner P-00 */}
+          {/* Kolom Kiri: Kuesioner Tahap Ini */}
           <div
-            className={`lg:col-span-6 space-y-6 ${
+            className={`lg:col-span-5 space-y-6 ${
               activeTab === "questions" ? "block" : "hidden lg:block"
             }`}
           >
-            <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-5 sm:p-6 shadow-xs space-y-8">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-5 sm:p-6 shadow-xs space-y-6">
               <div>
-                <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
-                  Pertanyaan P-00: Klarifikasi Ide
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                    {currentStage.badge}
+                  </span>
+                  <span className="text-xs text-zinc-400">
+                    Tahap {currentStage.stageNumber}
+                  </span>
+                </div>
+                <h2 className="mt-1 text-base sm:text-lg font-bold text-zinc-900 dark:text-zinc-100">
+                  {currentStage.title}
                 </h2>
-                <p className="mt-1 text-xs sm:text-sm text-zinc-500 dark:text-zinc-400">
-                  Isi data yang Anda miliki. Pilih status kepastian untuk setiap jawaban. Informasi yang belum Anda ketahui akan dijaga tanpa dikarang oleh AI agent.
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  {currentStage.description}
                 </p>
               </div>
 
-              {/* Questionnaire Groups */}
-              {P00_QUESTION_GROUPS.map((group) => {
-                const groupQuestions = P00_QUESTIONS.filter(
-                  (q) => q.group === group.id
-                );
-                return (
-                  <div key={group.id} className="space-y-5 pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
-                    <div>
-                      <h3 className="text-sm font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">
-                        {group.title}
-                      </h3>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                        {group.description}
-                      </p>
-                    </div>
+              {/* Questions List for Current Stage */}
+              <div className="space-y-5 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                {currentStage.questions.map((q: P00QuestionDef) => {
+                  const answerState = answers[q.key] || {
+                    value: "",
+                    certainty: q.defaultCertainty,
+                  };
+                  const isUnknown = answerState.certainty === "unknown";
+                  const isNA = answerState.certainty === "not_applicable";
 
-                    <div className="space-y-6">
-                      {groupQuestions.map((q: P00QuestionDef) => {
-                        const answerState = answers[q.key] || {
-                          value: "",
-                          certainty: q.defaultCertainty,
-                        };
-                        const isUnknown = answerState.certainty === "unknown";
-                        const isNA = answerState.certainty === "not_applicable";
-
-                        return (
-                          <div
-                            key={q.key}
-                            className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-zinc-50/50 dark:bg-zinc-950/40 space-y-3"
+                  return (
+                    <div
+                      key={q.key}
+                      className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-zinc-50/50 dark:bg-zinc-950/40 space-y-3"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+                        <div>
+                          <label
+                            htmlFor={q.key}
+                            className="text-xs sm:text-sm font-semibold text-zinc-900 dark:text-zinc-100"
                           >
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
-                              <div>
-                                <label
-                                  htmlFor={q.key}
-                                  className="text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                                >
-                                  {q.label}
-                                </label>
-                                <p className="text-xs text-zinc-500 mt-0.5">
-                                  {q.description}
-                                </p>
-                              </div>
+                            {q.label}
+                          </label>
+                          <p className="text-[11px] text-zinc-500 mt-0.5">
+                            {q.description}
+                          </p>
+                        </div>
 
-                              {/* Certainty Selector */}
-                              <div className="flex items-center gap-1.5 self-start sm:self-center">
-                                <label
-                                  htmlFor={`certainty-${q.key}`}
-                                  className="sr-only"
-                                >
-                                  Status Kepastian
-                                </label>
-                                <select
-                                  id={`certainty-${q.key}`}
-                                  value={answerState.certainty}
-                                  onChange={(e) =>
-                                    handleCertaintyChange(
-                                      q.key,
-                                      e.target.value as Certainty
-                                    )
-                                  }
-                                  className="text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2.5 py-1.5 text-zinc-800 dark:text-zinc-200 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                                >
-                                  {CERTAINTY_OPTIONS.map((opt) => (
-                                    <option key={opt.id} value={opt.id}>
-                                      {opt.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
+                        {/* Certainty Selector */}
+                        <div className="flex items-center gap-1.5 self-start sm:self-center">
+                          <label htmlFor={`certainty-${q.key}`} className="sr-only">
+                            Status Kepastian
+                          </label>
+                          <select
+                            id={`certainty-${q.key}`}
+                            value={answerState.certainty}
+                            onChange={(e) =>
+                              handleCertaintyChange(
+                                q.key,
+                                e.target.value as Certainty
+                              )
+                            }
+                            className="text-xs font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-zinc-800 dark:text-zinc-200 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                          >
+                            {CERTAINTY_OPTIONS.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
-                            {/* Input Field */}
-                            {!isUnknown && !isNA ? (
-                              <textarea
-                                id={q.key}
-                                rows={2}
-                                value={answerState.value}
-                                onChange={(e) =>
-                                  handleAnswerChange(q.key, e.target.value)
-                                }
-                                placeholder={q.placeholder}
-                                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-2.5 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:border-indigo-600 focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
-                              />
-                            ) : (
-                              <div className="p-2.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 text-xs text-zinc-500 italic flex items-center gap-2">
-                                <span>🔒</span>
-                                <span>
-                                  {isUnknown
-                                    ? "Ditandai sebagai 'Belum Diketahui' — AI agent akan mencatat ini sebagai pertanyaan terbuka."
-                                    : "Ditandai sebagai 'Tidak Relevan' untuk proyek ini."}
-                                </span>
-                              </div>
-                            )}
+                      {/* Input Field */}
+                      {!isUnknown && !isNA ? (
+                        <textarea
+                          id={q.key}
+                          rows={2}
+                          value={answerState.value}
+                          onChange={(e) => handleAnswerChange(q.key, e.target.value)}
+                          placeholder={q.placeholder}
+                          className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-2.5 text-xs text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:border-indigo-600 focus:outline-hidden focus:ring-1 focus:ring-indigo-600"
+                        />
+                      ) : (
+                        <div className="p-2.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 text-xs text-zinc-500 italic flex items-center gap-2">
+                          <span>🔒</span>
+                          <span>
+                            {isUnknown
+                              ? "Ditandai sebagai 'Belum Diketahui' — nilai tidak akan dikarang."
+                              : "Ditandai sebagai 'Tidak Relevan' untuk tahap ini."}
+                          </span>
+                        </div>
+                      )}
 
-                            <div className="flex items-center justify-between text-[11px] text-zinc-400 pt-1">
-                              <span>{q.helpText}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
+                      <div className="text-[11px] text-zinc-400 pt-0.5">
+                        {q.helpText}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          {/* Kolom Kanan: Hasil Prompt & Validasi */}
+          {/* Kolom Tengah/Kanan: Prompt Preview & Tangkap Hasil Agent */}
           <div
-            className={`lg:col-span-6 space-y-6 ${
-              activeTab === "preview" ? "block" : "hidden lg:block"
+            className={`lg:col-span-7 space-y-6 ${
+              activeTab !== "questions" ? "block" : "hidden lg:block"
             }`}
           >
             {/* Validation Banner */}
@@ -530,9 +800,7 @@ export default function PromptStudioPage({
                 }`}
               >
                 <div className="flex items-center gap-2 font-bold">
-                  <span>
-                    {isBlocked ? "⛔" : hasWarnings ? "⚠️" : "✅"}
-                  </span>
+                  <span>{isBlocked ? "⛔" : hasWarnings ? "⚠️" : "✅"}</span>
                   <span>
                     {isBlocked
                       ? "Penyusunan Prompt Terblokir"
@@ -555,7 +823,7 @@ export default function PromptStudioPage({
                 )}
                 {isBlocked && (
                   <p className="mt-2 text-xs font-semibold underline">
-                    Tindakan salin dan unduh dinonaktifkan sampai kredensial rahasia atau kesalahan variabel diperbaiki.
+                    Tindakan salin dan unduh dinonaktifkan sampai prasyarat atau kesalahan variabel diselesaikan.
                   </p>
                 )}
               </div>
@@ -574,7 +842,7 @@ export default function PromptStudioPage({
                         : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900"
                     }`}
                   >
-                    Hasil Kompilasi (Asli)
+                    Hasil Kompilasi {activeStageId}
                   </button>
                   <button
                     type="button"
@@ -632,26 +900,22 @@ export default function PromptStudioPage({
               {/* Mode Views */}
               {previewMode === "compiled" && (
                 <div className="relative">
-                  <pre className="w-full max-h-[640px] overflow-auto rounded-xl bg-zinc-900 p-4 text-xs font-mono text-zinc-100 whitespace-pre-wrap leading-relaxed border border-zinc-800">
+                  <pre className="w-full max-h-[380px] overflow-auto rounded-xl bg-zinc-900 p-4 text-xs font-mono text-zinc-100 whitespace-pre-wrap leading-relaxed border border-zinc-800">
                     {compileResult?.compiledPrompt || "Prompt belum selesai dikompilasi."}
                   </pre>
-                  <div className="mt-2 text-[11px] text-zinc-500">
-                    Kompilasi deterministik dari 7 lapisan kontrak Forma. Tidak bergantung pada koneksi internet atau API eksternal.
+                  <div className="mt-2 text-[11px] text-zinc-500 flex items-center justify-between">
+                    <span>Kompilasi deterministik dari 7 lapisan Forma.</span>
+                    <span>Template: {activeStageId} v1</span>
                   </div>
                 </div>
               )}
 
               {previewMode === "custom" && (
                 <div className="space-y-2">
-                  <p className="text-xs text-zinc-500">
-                    Kustomisasi prompt secara bebas khusus untuk run kali ini. Perubahan di sini <strong>tidak akan menimpa</strong> hasil kompilasi asli.
-                  </p>
                   <textarea
-                    rows={22}
+                    rows={15}
                     value={
-                      customPromptText ||
-                      compileResult?.compiledPrompt ||
-                      ""
+                      customPromptText || compileResult?.compiledPrompt || ""
                     }
                     onChange={(e) => setCustomPromptText(e.target.value)}
                     placeholder="Tulis editan prompt untuk run ini..."
@@ -666,7 +930,7 @@ export default function PromptStudioPage({
                       Reset ke Hasil Kompilasi Asli
                     </button>
                     <span className="text-[11px] text-zinc-400">
-                      Teks kustom ini yang akan disalin / diunduh saat mode ini aktif.
+                      Teks kustom ini tidak mengubah template asli.
                     </span>
                   </div>
                 </div>
@@ -674,21 +938,124 @@ export default function PromptStudioPage({
 
               {previewMode === "overrides" && (
                 <div className="space-y-2">
-                  <p className="text-xs text-zinc-500">
-                    Tambahkan instruksi spesifik untuk model AI (misal: bahasa Indonesia santai, batasi ke 3 fitur, dsb). Teks ini akan dibungkus secara aman di dalam blok berpagar <code>DATA PENGGUNA</code>.
-                  </p>
                   <textarea
-                    rows={8}
+                    rows={6}
                     value={userOverrides}
                     onChange={(e) => setUserOverrides(e.target.value)}
-                    placeholder="Contoh: Fokuskan solusi pada pencatatan harian yang bisa dilakukan dalam waktu kurang dari 30 detik tanpa registrasi akun."
-                    className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Instruksi tambahan yang dibungkus berpagar aman di DATA PENGGUNA..."
+                    className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
                   />
-                  <div className="text-[11px] text-zinc-400">
-                    Instruksi tambahan akan otomatis dimasukkan ke dalam Layer 5 prompt terkompilasi.
-                  </div>
                 </div>
               )}
+            </div>
+
+            {/* R3 Capture & Review Agent Output Section */}
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-zinc-100 dark:border-zinc-800 pb-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Tangkap & Tinjau Hasil Agent ({activeStageId})
+                    </h3>
+                    {currentStageArtifact?.status === "approved" && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                        ✓ APPROVED
+                      </span>
+                    )}
+                    {currentStageArtifact?.status === "rejected" && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300">
+                        ✗ REJECTED
+                      </span>
+                    )}
+                    {(currentStageArtifact?.status === "captured" ||
+                      currentStageArtifact?.status === "in_review") && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                        PERLU REVIEW
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Tempelkan respon dari AI coding agent atau unggah file Markdown (.md). Hanya hasil yang <strong>disetujui</strong> yang akan diteruskan ke prompt tahap selanjutnya.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept=".md,.txt"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition cursor-pointer"
+                  >
+                    📂 Unggah .md
+                  </button>
+                </div>
+              </div>
+
+              {artifactFeedback.type && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-center justify-between border ${
+                    artifactFeedback.type === "success"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300"
+                      : "bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300"
+                  }`}
+                >
+                  <span>{artifactFeedback.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => setArtifactFeedback({ type: null, message: "" })}
+                    className="font-bold underline ml-2 cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Artifact Markdown Content Editor */}
+              <div className="space-y-2">
+                <textarea
+                  rows={10}
+                  value={artifactDraftContent}
+                  onChange={(e) => setArtifactDraftContent(e.target.value)}
+                  placeholder={`Tempelkan hasil markdown dari agent untuk tahap ${activeStageId} di sini (misal: ${currentStage.expectedArtifactTitle})...`}
+                  className="w-full rounded-xl border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 p-3 text-xs font-mono text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
+                />
+
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
+                  <span className="text-[11px] text-zinc-400">
+                    Input diperlakukan sebagai data pasif (untrusted data) dengan isolasi pagar kode.
+                  </span>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSaveArtifact("rejected")}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg text-rose-600 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:text-rose-300 dark:hover:bg-rose-900/60 transition cursor-pointer"
+                    >
+                      ✗ Tolak Hasil
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveArtifact("in_review")}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg text-zinc-700 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition cursor-pointer"
+                    >
+                      Simpan Draf Review
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveArtifact("approved")}
+                      className="px-4 py-1.5 text-xs font-bold rounded-lg text-white bg-emerald-600 hover:bg-emerald-500 shadow-xs transition cursor-pointer"
+                    >
+                      ✓ Setujui Hasil (Approve)
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

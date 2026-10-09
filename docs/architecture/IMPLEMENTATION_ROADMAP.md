@@ -12,29 +12,29 @@ Menyimpang dari urutan blueprint §18 pada satu hal: **compiler didahulukan sebe
 
 ```mermaid
 flowchart LR
-  R0["R0 Fondasi repo"] --> R1["R1 Compiler murni"]
-  R1 --> R2["R2 ★ Vertical slice pertama (MVP-Core)"]
-  R2 --> R3["R3 Riwayat run & persistence server"]
-  R3 --> R4["R4 Chain + hasil agent"]
-  R4 --> R5["R5 Export pack + template lanjutan"]
-  R5 --> R6["R6 Artefak & traceability (dipangkas)"]
+  R0["R0 Fondasi repo (Done)"] --> R1["R1 Compiler murni (Done)"]
+  R1 --> R2["R2 Vertical slice MVP-Core (Done)"]
+  R2 --> R3["R3 Prompt Chain Foundation (Done)"]
+  R3 --> R4["R4 Export pack .zip & template lanjutan"]
+  R4 --> R5["R5 Server persistence & multi-device auth"]
+  R5 --> R6["R6 Artefak & traceability"]
   R6 --> R7["R7 AI assistance (opsional)"]
   R7 --> R8["R8 Hardening & rilis"]
 ```
 
-| Fase | Nama | Prioritas | Menghasilkan nilai bagi pengguna? | Kriteria MVP blueprint yang terpenuhi |
+| Fase | Nama | Status | Menghasilkan nilai bagi pengguna? | Kriteria MVP blueprint yang terpenuhi |
 |---|---|---|---|---|
-| R0 | Fondasi repo | Wajib | Tidak (infrastruktur) | #19 (sebagian) |
-| R1 | Compiler murni + fixture | Wajib | Tidak langsung (diuji lewat test) | #7 (inti), #10 (sebagian), #16 (sebagian) |
-| **R2** | **Vertical slice pertama** | **Wajib — MVP-Core** | **Ya** | #1, #2, #7, #8 (sebagian), #17, #18 |
-| R3 | Riwayat run, versi template, persistence server | Wajib | Ya | #8, #13, #15, #20 |
-| R4 | Chain + capture/approve hasil agent + stale | Wajib | Ya | #9, #11, #10, #16 |
-| R5 | Export pack `.zip` + template P-03…P-12 | Wajib | Ya | #12 |
-| R6 | Artefak, requirement, asumsi/open question (dipangkas) | Ditunda | Sedang | #4, #5, #6, #14 |
+| R0 | Fondasi repo | Selesai (Verified) | Tidak (infrastruktur) | #19 (sebagian) |
+| R1 | Compiler murni + fixture | Selesai (Verified) | Tidak langsung (diuji lewat test) | #7 (inti), #10 (sebagian), #16 (sebagian) |
+| R2 | Vertical slice MVP-Core | Selesai (Verified) | Ya | #1, #2, #7, #8, #17, #18 |
+| **R3** | **Prompt Chain Foundation (P-00 → P-01 → P-02)** | **Selesai (Verified)** | **Ya** | #8, #9, #10, #11, #13, #15, #16 |
+| R4 | Export pack `.zip` + template P-03…P-12 | Rencana | Ya | #12 |
+| R5 | Server persistence & multi-device auth | Rencana | Ya | #20 |
+| R6 | Artefak, requirement, asumsi/open question | Ditunda | Sedang | #4, #5, #6, #14 |
 | R7 | AI assistance | Opsional | Sedang | — |
 | R8 | Hardening & rilis | Wajib sebelum publik | — | #16, #17, #19, #20 |
 
-**MVP-Core** = R0 + R1 + R2. **MVP-Full** = R0–R6 + R8.
+**MVP-Core** = R0 + R1 + R2. **MVP-Chain** = R0–R3. **MVP-Full** = R0–R6 + R8.
 
 ---
 

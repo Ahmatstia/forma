@@ -1,16 +1,22 @@
-import { Project, ProjectAnswer } from "./types";
-import { PromptGenerationRun } from "@/modules/runs";
+import {
+  Project,
+  ProjectAnswer,
+  ProjectSchema,
+  ProjectAnswerSchema,
+  AgentArtifact,
+  AgentArtifactSchema,
+} from "./types";
+import { PromptGenerationRun, PromptGenerationRunSchema } from "@/modules/runs";
 import { z } from "zod";
-import { ProjectSchema, ProjectAnswerSchema } from "./types";
-import { PromptGenerationRunSchema } from "@/modules/runs";
 
 export const ExportPayloadSchema = z.object({
-  version: z.literal("1.0"),
+  version: z.union([z.literal("1.0"), z.literal("2.0")]),
   exportedAt: z.string(),
-  source: z.literal("forma-browser-storage"),
+  source: z.string(),
   projects: z.array(ProjectSchema),
   answers: z.array(ProjectAnswerSchema),
   runs: z.array(PromptGenerationRunSchema),
+  artifacts: z.array(AgentArtifactSchema).optional().default([]),
 });
 
 export type ExportPayload = z.infer<typeof ExportPayloadSchema>;
@@ -32,6 +38,10 @@ export interface ProjectRepository {
 
   getRuns(projectId: string): Promise<PromptGenerationRun[]>;
   saveRun(run: PromptGenerationRun): Promise<void>;
+
+  getArtifacts(projectId: string): Promise<AgentArtifact[]>;
+  getArtifact(projectId: string, stage: string): Promise<AgentArtifact | null>;
+  saveArtifact(artifact: AgentArtifact): Promise<void>;
 
   exportAll(): Promise<ExportPayload>;
   importAll(rawJsonOrObj: unknown): Promise<ImportResult>;
