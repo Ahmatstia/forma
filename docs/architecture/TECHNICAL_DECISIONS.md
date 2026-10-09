@@ -30,6 +30,7 @@ Label resmi:
 | **A-10** | **Deteksi Secret dan Pemblokiran:** Deteksi secret wajib diuji. Jika terdeteksi indikasi secret, copy/export diblokir sampai ditangani pengguna secara eksplisit. Deteksi bersifat heuristik dan tidak menjamin 100% bebas secret. | **APPROVED** | [ADR-0008](../decisions/ADR-0008-secret-detection-policy.md) |
 | **A-11** | **Evaluasi Template Engine (LiquidJS vs Minimal Renderer):** LiquidJS hanya boleh dipilih jika spike teknis membuktikan kontrol operasi allowlist dan keamanan sesuai kontrak compiler. Jika gagal, gunakan renderer minimal yang terbatas dan teruji. | **APPROVED** | [ADR-0009](../decisions/ADR-0009-template-engine-evaluation-liquidjs.md) |
 | **A-12** | **AI Assistance Bersifat Opsional:** Fitur integrasi AI (interviewer adaptif, ekstraksi) bersifat opsional dan compiler tidak boleh memiliki ketergantungan pada API key atau provider AI eksternal. | **APPROVED** | [ADR-0010](../decisions/ADR-0010-ai-assistance-optional.md) |
+| **A-13** | **Persistensi Browser & Pengamanan Pagar Data (R2):** Gunakan localStorage di balik interface ProjectRepository dengan Zod schema validation dan format cadangan ekspor/impor JSON v1.0. Terapkan pagar dinamis berpagar panjang ganda (dynamic code fence) untuk mencegah injeksi triple backticks. | **APPROVED** | [ADR-0011](../decisions/ADR-0011-browser-storage-and-r2-persistence.md) |
 
 ---
 

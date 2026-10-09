@@ -128,9 +128,7 @@ Perjelas ide berikut dan ubah menjadi problem framing yang bisa dipakai untuk me
 
 # Ide awal
 DATA PENGGUNA:
-\`\`\`text
-{{ answers.project.ideaSummary }}
-\`\`\`
+{{ answers.project.ideaSummary | fence_data }}
 
 # Input yang sudah diketahui
 - Target pengguna: {{ answers.product.targetUsers | or_unknown }}

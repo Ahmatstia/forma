@@ -92,7 +92,19 @@ export function resolveProjectContext(
     const label = FIELD_HUMAN_LABELS[a.key] || a.key;
     const valStr = formatValue(a.value);
 
-    if (a.certainty === "confirmed") {
+    if (a.key === "product.unknowns" && Array.isArray(a.value)) {
+      for (const item of a.value) {
+        if (typeof item === "string" && item.trim().length > 0) {
+          const trimmed = item.trim();
+          if (!unknowns.includes(trimmed)) {
+            unknowns.push(trimmed);
+          }
+          if (!openQuestions.includes(trimmed)) {
+            openQuestions.push(trimmed);
+          }
+        }
+      }
+    } else if (a.certainty === "confirmed") {
       facts.push(`${label}: ${valStr}`);
     } else if (a.certainty === "assumption") {
       assumptions.push(`${label}: ${valStr}`);

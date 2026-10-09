@@ -7,6 +7,7 @@ const SECRET_PATTERNS = [
   /-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----/,
   /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
   /ghp_[A-Za-z0-9]{36}/,
+  /sk-[A-Za-z0-9_-]{20,}/,
   /(?:api[_-]?key|secret|password|passwd|auth[_-]?token)\s*[:=]\s*['"][A-Za-z0-9!@#$%^&*-_]{8,}['"]/i,
 ];
 

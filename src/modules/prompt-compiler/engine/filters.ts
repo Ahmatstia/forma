@@ -36,4 +36,16 @@ export const builtInFilters: Record<string, TemplateFilterFn> = {
     if (Array.isArray(val)) return formatList(val);
     return String(val);
   },
+
+  fence_data: (val: unknown): string => {
+    const text = val === null || val === undefined ? "" : String(val).trim();
+    const matches = text.match(/`+/g) || [];
+    let max = 0;
+    for (const m of matches) {
+      if (m.length > max) max = m.length;
+    }
+    const fenceLen = Math.max(3, max + 1);
+    const fence = "`".repeat(fenceLen);
+    return `${fence}text\n${text}\n${fence}`;
+  },
 };

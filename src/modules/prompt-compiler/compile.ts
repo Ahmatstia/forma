@@ -30,6 +30,8 @@ export interface CompilePromptResult {
   validationMessages: ValidationMessage[];
 }
 
+export type CompileResult = CompilePromptResult;
+
 export function compilePrompt(
   project: Project,
   answers: ProjectAnswer[],
@@ -96,8 +98,16 @@ export function compilePrompt(
   }
 
   if (options?.userOverrides && options.userOverrides.trim().length > 0) {
+    const overrideText = options.userOverrides.trim();
+    const matches = overrideText.match(/`+/g) || [];
+    let maxBackticks = 0;
+    for (const m of matches) {
+      if (m.length > maxBackticks) maxBackticks = m.length;
+    }
+    const fenceLen = Math.max(3, maxBackticks + 1);
+    const fence = "`".repeat(fenceLen);
     layers.push(
-      `# Instruksi Tambahan (Run Overrides)\nDATA PENGGUNA:\n\`\`\`text\n${options.userOverrides.trim()}\n\`\`\``
+      `# Instruksi Tambahan (Run Overrides)\nDATA PENGGUNA:\n${fence}text\n${overrideText}\n${fence}`
     );
   }
 

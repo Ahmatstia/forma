@@ -179,4 +179,50 @@ describe("Prompt Compiler (R1)", () => {
     expect(run1.compiledPrompt).toBe(run2.compiledPrompt);
     expect(run1.snapshot.contextHash).toBe(run2.snapshot.contextHash);
   });
+
+  it("safely prevents triple backticks in ideaSummary from breaking the code fence", () => {
+    const projectWithBackticks = {
+      ...KOSTCERDAS_PROJECT,
+      ideaSummary: "Aplikasi dengan kode ```const x = 1;``` di dalam deskripsi",
+    };
+
+    const result = compilePrompt(projectWithBackticks, KOSTCERDAS_ANSWERS);
+    const prompt = result.compiledPrompt;
+
+    // Must be enclosed with 4 backticks so the inner 3 backticks do not close the block
+    expect(prompt).toContain("````text\nAplikasi dengan kode ```const x = 1;``` di dalam deskripsi\n````");
+  });
+
+  it("safely prevents triple backticks in userOverrides from breaking the code fence", () => {
+    const result = compilePrompt(KOSTCERDAS_PROJECT, KOSTCERDAS_ANSWERS, {
+      userOverrides: "Instruksi khusus dengan ```override``` berbahaya",
+    });
+
+    const prompt = result.compiledPrompt;
+    expect(prompt).toContain("````text\nInstruksi khusus dengan ```override``` berbahaya\n````");
+  });
+
+  it("includes explicit product.unknowns list in derived unknowns and envelope", () => {
+    const answersWithUnknowns: ProjectAnswer[] = [
+      ...KOSTCERDAS_ANSWERS,
+      {
+        id: "ans_unknown_list",
+        projectId: KOSTCERDAS_PROJECT.id,
+        key: "product.unknowns",
+        value: ["Berapa batas maksimal transaksi?", "Apakah butuh scan struk?"],
+        valueType: "string_list",
+        certainty: "confirmed",
+        source: "user",
+        updatedAt: "2026-10-09T00:00:00Z",
+      },
+    ];
+
+    const result = compilePrompt(KOSTCERDAS_PROJECT, answersWithUnknowns);
+    const prompt = result.compiledPrompt;
+
+    expect(prompt).toContain("Berapa batas maksimal transaksi?");
+    expect(prompt).toContain("Apakah butuh scan struk?");
+    expect(result.snapshot.openQuestions).toContain("Berapa batas maksimal transaksi?");
+    expect(result.snapshot.openQuestions).toContain("Apakah butuh scan struk?");
+  });
 });
